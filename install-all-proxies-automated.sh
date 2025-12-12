@@ -79,6 +79,15 @@ fi
 echo "📁 Install script: $INSTALL_SCRIPT"
 echo ""
 
+# Get current server IP (where script is running)
+CURRENT_SERVER_IP=$(hostname -I | awk '{print $1}' 2>/dev/null || ip addr show | grep -oP '(?<=inet\s)\d+(\.\d+){3}' | grep -v '127.0.0.1' | head -1 || echo "")
+if [ -z "$CURRENT_SERVER_IP" ]; then
+    # Try alternative method
+    CURRENT_SERVER_IP=$(curl -s ifconfig.me 2>/dev/null || echo "")
+fi
+echo "📍 Current server IP: ${CURRENT_SERVER_IP:-unknown}"
+echo ""
+
 # Store proxy list for later use
 PROXY_LIST_FILE="./gasnet-proxy-list.txt"
 echo "# Gasnet SOCKS5 Proxy List" > $PROXY_LIST_FILE
@@ -100,6 +109,27 @@ for IP in "${IPS[@]}"; do
             break
         fi
     done
+    
+    # ✅ CRITICAL FIX: Skip current server IP (install locally instead of via SSH)
+    if [ -n "$CURRENT_SERVER_IP" ] && [ "$IP" = "$CURRENT_SERVER_IP" ]; then
+        echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+        echo "📍 Installing proxy locally on $IP (current server)..."
+        echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+        echo ""
+        
+        # Install directly on current server (no SSH needed)
+        if bash "$INSTALL_SCRIPT" "$PROXY_USER" "$PROXY_PASS" "$PLATFORM_IP" 2>&1; then
+            echo "✅ Success: $IP (local installation)"
+            echo "socks5://$PROXY_USER:$PROXY_PASS@$IP:1080" >> $PROXY_LIST_FILE
+            ((SUCCESS_COUNT++))
+        else
+            echo "❌ Failed: $IP (local installation)"
+            ((FAILED_COUNT++))
+            FAILED_IPS+=("$IP")
+        fi
+        echo ""
+        continue
+    fi
     
     if [ "$SKIP_THIS" = true ]; then
         echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
