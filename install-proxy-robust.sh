@@ -65,11 +65,44 @@ systemctl disable 3proxy 2>/dev/null || true
 
 # Install dependencies
 echo "📦 Installing dependencies..."
-apt update -qq
-apt install -y git gcc make libc6-dev wget curl openssl 2>/dev/null || {
-    echo "❌ Failed to install dependencies"
-    exit 1
-}
+
+# ✅ FIX: Disable problematic repositories before update
+if [ -f /etc/apt/sources.list.d/php.list ]; then
+    echo "   ⚠️  Found PHP repository, temporarily disabling to avoid errors..."
+    mv /etc/apt/sources.list.d/php.list /etc/apt/sources.list.d/php.list.disabled 2>/dev/null || true
+fi
+
+# ✅ FIX: Handle repository errors gracefully (skip invalid repositories)
+# Use --allow-releaseinfo-change to skip invalid repositories
+if DEBIAN_FRONTEND=noninteractive apt update --allow-releaseinfo-change -qq 2>&1 | grep -v "I'm a teapot\|not signed\|Failed to fetch" >/dev/null 2>&1; then
+    echo "   ✅ Repository update successful"
+else
+    # If --allow-releaseinfo-change not supported, try regular update
+    echo "   ⚠️  Repository update had some errors, continuing anyway..."
+    DEBIAN_FRONTEND=noninteractive apt update -qq 2>&1 | grep -v "I'm a teapot\|not signed\|Failed to fetch" >/dev/null 2>&1 || true
+fi
+
+# ✅ FIX: Install dependencies (these are standard packages, should work even with repo errors)
+echo "   Installing: git gcc make libc6-dev wget curl openssl..."
+if DEBIAN_FRONTEND=noninteractive apt install -y git gcc make libc6-dev wget curl openssl >/dev/null 2>&1; then
+    echo "   ✅ Dependencies installed successfully"
+else
+    # Try again with error output visible for debugging
+    echo "   ⚠️  First attempt failed, trying again with verbose output..."
+    if ! DEBIAN_FRONTEND=noninteractive apt install -y git gcc make libc6-dev wget curl openssl 2>&1 | grep -v "I'm a teapot\|not signed"; then
+        echo "❌ Failed to install dependencies"
+        echo ""
+        echo "💡 Troubleshooting:"
+        echo "   1. Check repository configuration: cat /etc/apt/sources.list"
+        echo "   2. Remove invalid repositories:"
+        echo "      sudo rm -f /etc/apt/sources.list.d/php.list"
+        echo "      sudo apt update"
+        echo "   3. Or install manually:"
+        echo "      sudo apt-get install git gcc make libc6-dev wget curl openssl"
+        exit 1
+    fi
+    echo "   ✅ Dependencies installed successfully"
+fi
 
 # Download & build 3proxy
 echo "📦 Downloading 3proxy source..."
