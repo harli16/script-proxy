@@ -38,8 +38,22 @@ if [ "$EUID" -ne 0 ]; then
     exit 1
 fi
 
-# Get current IP
-CURRENT_IP=$(hostname -I | awk '{print $1}' || ip addr show | grep -oP '(?<=inet\s)\d+(\.\d+){3}' | grep -v '127.0.0.1' | head -1 || echo "unknown")
+# Get current IP (try multiple methods)
+CURRENT_IP=""
+if command -v hostname >/dev/null 2>&1; then
+    CURRENT_IP=$(hostname -I 2>/dev/null | awk '{print $1}' | grep -v '^$' || echo "")
+fi
+if [ -z "$CURRENT_IP" ]; then
+    CURRENT_IP=$(ip addr show 2>/dev/null | grep -oP '(?<=inet\s)\d+(\.\d+){3}' | grep -v '127.0.0.1' | head -1 || echo "")
+fi
+if [ -z "$CURRENT_IP" ]; then
+    CURRENT_IP=$(curl -s --connect-timeout 3 https://api.ipify.org 2>/dev/null || echo "")
+fi
+if [ -z "$CURRENT_IP" ]; then
+    echo "⚠️  Warning: Could not detect server IP automatically"
+    echo "   Please specify IP manually or check network configuration"
+    CURRENT_IP="unknown"
+fi
 echo "📍 Server IP: $CURRENT_IP"
 echo ""
 
@@ -196,11 +210,12 @@ EOF
 
 # Validate config syntax before replacing
 echo "🔍 Validating config..."
-if /usr/local/bin/3proxy -c /tmp/3proxy.cfg.new 2>&1 | grep -q "error\|failed"; then
+if ! /usr/local/bin/3proxy -c /tmp/3proxy.cfg.new >/dev/null 2>&1; then
     echo "   ❌ Config validation failed:"
     /usr/local/bin/3proxy -c /tmp/3proxy.cfg.new 2>&1 || true
     exit 1
 fi
+echo "   ✅ Config syntax is valid"
 
 # Backup old config if exists
 if [ -f /etc/3proxy/3proxy.cfg ]; then
@@ -278,19 +293,28 @@ fi
 # Setup firewall (if ufw is active)
 if command -v ufw >/dev/null 2>&1 && ufw status | grep -q "Status: active"; then
     echo "🔥 Configuring firewall..."
+    # Allow from platform IP
     ufw allow from $PLATFORM_IP to any port 1080 2>/dev/null || true
-    echo "   ✅ Firewall rule added for $PLATFORM_IP"
+    # Allow from localhost for local testing
+    ufw allow from 127.0.0.1 to any port 1080 2>/dev/null || true
+    echo "   ✅ Firewall rules added for $PLATFORM_IP and localhost"
 fi
 
-# Test proxy locally
+# Test proxy locally (if curl is available)
 echo "🔍 Testing proxy locally..."
 sleep 2
-TEST_IP=$(curl -s --connect-timeout 5 --socks5 $PROXY_USER:$PROXY_PASS@127.0.0.1:1080 https://api.ipify.org 2>/dev/null || echo "FAILED")
-
-if [ "$TEST_IP" != "FAILED" ] && [ -n "$TEST_IP" ]; then
-    echo "   ✅ Local proxy test: OK (IP: $TEST_IP)"
+if command -v curl >/dev/null 2>&1; then
+    TEST_IP=$(curl -s --connect-timeout 5 --socks5 $PROXY_USER:$PROXY_PASS@127.0.0.1:1080 https://api.ipify.org 2>/dev/null || echo "FAILED")
+    
+    if [ "$TEST_IP" != "FAILED" ] && [ -n "$TEST_IP" ] && [ "$TEST_IP" != "unknown" ]; then
+        echo "   ✅ Local proxy test: OK (IP: $TEST_IP)"
+    else
+        echo "   ⚠️  Local test failed (proxy might need external test from platform VM)"
+        echo "   💡 Test manually: curl --socks5 $PROXY_USER:$PROXY_PASS@127.0.0.1:1080 https://api.ipify.org"
+    fi
 else
-    echo "   ⚠️  Local test failed (might need external test from platform VM)"
+    echo "   ⚠️  curl not available, skipping local test"
+    echo "   💡 Install curl or test from platform VM: curl --socks5 $PROXY_USER:$PROXY_PASS@$CURRENT_IP:1080 https://api.ipify.org"
 fi
 
 echo ""
